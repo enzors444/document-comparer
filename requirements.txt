@@ -1,0 +1,28 @@
+# PDF Processing
+PyPDF2==3.0.1
+pdfplumber==0.10.3
+
+# Text Processing & NLP
+nltk==3.8.1
+textstat==0.7.3
+python-Levenshtein==0.23.0
+
+# Data Processing
+pandas==2.1.4
+numpy==1.24.3
+
+# JSON & Configuration
+pydantic==2.5.2
+python-dotenv==1.0.0
+
+# Logging & Monitoring
+structlog==23.2.0
+
+# API & Web
+fastapi==0.110.2
+uvicorn==0.29.0
+streamlit==1.35.0
+
+# Development
+black==23.12.1
+flake8==6.1.0 
