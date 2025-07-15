@@ -251,34 +251,36 @@ class ExtratorPDF:
         return estrutura
     
     def _segmentar_conteudo(self, texto_formatado: List[Dict[str, Any]], estrutura: Dict[str, Any]) -> List[Segmento]:
-        """Segmentação híbrida: agrupa blocos conceituais (título + definição, parágrafo, item de lista) e só depois quebra em frases, agrupando frases curtas ou dependentes."""
+        """Segmentação aprimorada: cada segmento é uma frase completa, reconstruindo frases cortadas e separando listas item a item."""
+        import re
         segmentos = []
         posicao_global = 0
         contexto_atual = None
         clausula_atual = None
         secao_atual = None
         bloco_atual = []
+        conectores = {"que", "de", "para", "e", "ou", "mas", "porém", "contudo", "todavia", "enquanto", "quando", "como", "se", "com", "em", "por", "a", "o", "as", "os", "no", "na", "nos", "nas", "do", "da", "dos", "das"}
         def eh_titulo(tipo, texto):
             return tipo in ["titulo_clausula", "titulo_secao", "titulo", "titulo_destaque"] or (texto.isupper() and len(texto.split()) <= 8)
         def eh_lista(texto):
-            return bool(re.match(r'^[\-\*\d]+[\).\-]', texto.strip()))
-        for elem in texto_formatado:
+            return bool(re.match(r'^[\-\*\d]+[\).\-]', texto.strip())) or bool(re.match(r'^[a-z]\)\s+', texto.strip()))
+        def termina_com_pontuacao_forte(linha):
+            return bool(re.search(r'[.!?]$', linha.strip()))
+        def termina_com_conector(linha):
+            palavras = linha.strip().split()
+            return palavras and palavras[-1].lower() in conectores
+        i = 0
+        while i < len(texto_formatado):
+            elem = texto_formatado[i]
             tipo = elem["tipo"]
             texto = elem["texto"].strip()
             # Se for título, fecha bloco anterior e inicia novo contexto
             if eh_titulo(tipo, texto):
                 if bloco_atual:
-                    bloco_texto = ' '.join(bloco_atual).strip()
-                    if bloco_texto:
-                        frases = self._dividir_em_frases(bloco_texto)
-                        bloco_final = []
+                    frase_reconstruida = " ".join(bloco_atual).strip()
+                    if frase_reconstruida:
+                        frases = self._dividir_em_frases(frase_reconstruida)
                         for frase in frases:
-                            # Agrupar frases curtas ou dependentes
-                            if bloco_final and (len(frase) < 40 or frase[0].islower() or frase[0] in ',.;:'): 
-                                bloco_final[-1] += ' ' + frase
-                            else:
-                                bloco_final.append(frase)
-                        for frase in bloco_final:
                             if frase.strip():
                                 segmentos.append(Segmento(
                                     texto=frase.strip(),
@@ -298,60 +300,35 @@ class ExtratorPDF:
                     clausula_atual = texto
                 if tipo == "titulo_secao":
                     secao_atual = texto
+                i += 1
                 continue
-            # Se for item de lista, trata como bloco próprio
+            # Se for item de lista, separar cada item
             if eh_lista(texto):
-                if bloco_atual:
-                    bloco_texto = ' '.join(bloco_atual).strip()
-                    if bloco_texto:
-                        frases = self._dividir_em_frases(bloco_texto)
-                        bloco_final = []
-                        for frase in frases:
-                            if bloco_final and (len(frase) < 40 or frase[0].islower() or frase[0] in ',.;:'):
-                                bloco_final[-1] += ' ' + frase
-                            else:
-                                bloco_final.append(frase)
-                        for frase in bloco_final:
-                            if frase.strip():
-                                segmentos.append(Segmento(
-                                    texto=frase.strip(),
-                                    pagina=elem["pagina"],
-                                    posicao=posicao_global,
-                                    tipo=self._detectar_tipo_elemento(frase),
-                                    contexto={
-                                        "clausula": clausula_atual,
-                                        "secao": secao_atual,
-                                        "titulo": contexto_atual
-                                    }
-                                ))
-                                posicao_global += 1
-                    bloco_atual = []
-                segmentos.append(Segmento(
-                    texto=texto,
-                    pagina=elem["pagina"],
-                    posicao=posicao_global,
-                    tipo=tipo,
-                    contexto={
-                        "clausula": clausula_atual,
-                        "secao": secao_atual,
-                        "titulo": contexto_atual
-                    }
-                ))
-                posicao_global += 1
+                itens = self._separar_itens_lista(texto)
+                for item in itens:
+                    if item:
+                        segmentos.append(Segmento(
+                            texto=item.strip(),
+                            pagina=elem["pagina"],
+                            posicao=posicao_global,
+                            tipo="item_lista",
+                            contexto={
+                                "clausula": clausula_atual,
+                                "secao": secao_atual,
+                                "titulo": contexto_atual
+                            }
+                        ))
+                        posicao_global += 1
+                bloco_atual = []
+                i += 1
                 continue
             # Se for linha vazia, fecha bloco
             if not texto:
                 if bloco_atual:
-                    bloco_texto = ' '.join(bloco_atual).strip()
-                    if bloco_texto:
-                        frases = self._dividir_em_frases(bloco_texto)
-                        bloco_final = []
+                    frase_reconstruida = " ".join(bloco_atual).strip()
+                    if frase_reconstruida:
+                        frases = self._dividir_em_frases(frase_reconstruida)
                         for frase in frases:
-                            if bloco_final and (len(frase) < 40 or frase[0].islower() or frase[0] in ',.;:'):
-                                bloco_final[-1] += ' ' + frase
-                            else:
-                                bloco_final.append(frase)
-                        for frase in bloco_final:
                             if frase.strip():
                                 segmentos.append(Segmento(
                                     texto=frase.strip(),
@@ -366,21 +343,36 @@ class ExtratorPDF:
                                 ))
                                 posicao_global += 1
                     bloco_atual = []
+                i += 1
                 continue
-            # Caso geral: acumula linha no bloco atual
+            # Reconstrução de frases: juntar até pontuação forte e não terminar em conector
             bloco_atual.append(texto)
+            if termina_com_pontuacao_forte(texto) and not termina_com_conector(texto):
+                frase_reconstruida = " ".join(bloco_atual).strip()
+                if frase_reconstruida:
+                    frases = self._dividir_em_frases(frase_reconstruida)
+                    for frase in frases:
+                        if frase.strip():
+                            segmentos.append(Segmento(
+                                texto=frase.strip(),
+                                pagina=elem["pagina"],
+                                posicao=posicao_global,
+                                tipo=self._detectar_tipo_elemento(frase),
+                                contexto={
+                                    "clausula": clausula_atual,
+                                    "secao": secao_atual,
+                                    "titulo": contexto_atual
+                                }
+                            ))
+                            posicao_global += 1
+                bloco_atual = []
+            i += 1
         # Salva último bloco
         if bloco_atual:
-            bloco_texto = ' '.join(bloco_atual).strip()
-            if bloco_texto:
-                frases = self._dividir_em_frases(bloco_texto)
-                bloco_final = []
+            frase_reconstruida = " ".join(bloco_atual).strip()
+            if frase_reconstruida:
+                frases = self._dividir_em_frases(frase_reconstruida)
                 for frase in frases:
-                    if bloco_final and (len(frase) < 40 or frase[0].islower() or frase[0] in ',.;:'):
-                        bloco_final[-1] += ' ' + frase
-                    else:
-                        bloco_final.append(frase)
-                for frase in bloco_final:
                     if frase.strip():
                         segmentos.append(Segmento(
                             texto=frase.strip(),

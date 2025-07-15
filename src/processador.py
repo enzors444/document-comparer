@@ -10,7 +10,7 @@ import json
 from .models import ConfiguracaoProcessamento, Documento, ResultadoComparacao
 from .extrator import ExtratorPDF
 from .normalizador import NormalizadorTexto
-from .comparador_aprimorado import ComparadorAprimorado
+from .comparador import Comparador
 from .utils import setup_logging, salvar_resultado_json, validar_arquivo_pdf, gerar_relatorio_comparacao
 
 logger = setup_logging(__name__)
@@ -23,7 +23,7 @@ class ProcessadorDocumentos:
         self.config = config
         self.extrator = ExtratorPDF(config)
         self.normalizador = NormalizadorTexto(config)
-        self.comparador = ComparadorAprimorado(config)
+        self.comparador = Comparador(config)
         
     def processar_documentos(self, caminho_pdf1: str, caminho_pdf2: str, 
                            caminho_saida: Optional[str] = None) -> ResultadoComparacao:

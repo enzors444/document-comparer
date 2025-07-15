@@ -69,7 +69,7 @@ def comparar_pdfs(
     result_id = str(uuid.uuid4())
     result_path = RESULTS_DIR / f"{result_id}.json"
     with open(result_path, "w", encoding="utf-8") as f:
-        f.write(resposta.model_dump_json(indent=2))
+        f.write(json.dumps(resposta.model_dump(), ensure_ascii=False, indent=2, default=str))
     
     return {"id": result_id, "resultado": resposta.model_dump()}
 
@@ -95,7 +95,7 @@ def get_resultado(result_id: str):
     if not result_path.exists():
         raise HTTPException(status_code=404, detail="Resultado não encontrado")
     with open(result_path, "r", encoding="utf-8") as f:
-        data = f.read()
+        data = json.load(f)
     return JSONResponse(content=data)
 
 @app.get("/api/filtrar-alterados/{result_id}")
@@ -108,11 +108,8 @@ def filtrar_alterados(result_id: str):
         raise HTTPException(status_code=404, detail="Resultado não encontrado")
     with open(result_path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    comparacoes = data.get("comparacoes", [])
-    alterados = [
-        c for c in comparacoes
-        if c.get("tipo_diferenca") in ["removido", "modificado", "adicionado"]
-    ]
+    # Filtrar comparacoes alteradas
+    alterados = [c for c in data.get("comparacoes", []) if c.get("tipo_diferenca") in ["removido", "adicionado", "modificado"]]
     return {"id": result_id, "alterados": alterados}
 
 @app.get("/api/lista_uploads")
