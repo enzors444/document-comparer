@@ -8,7 +8,6 @@ from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 import pdfplumber
 import PyPDF2
-import spacy
 import stanza
 import fitz  # PyMuPDF
 import easyocr
@@ -20,9 +19,6 @@ from .models import Documento, Segmento, ConfiguracaoProcessamento
 from .utils import setup_logging
 
 logger = setup_logging(__name__)
-
-# Carregar modelo spaCy para português (carregado uma vez)
-_nlp_pt = spacy.load('pt_core_news_sm')
 
 
 class ExtratorPDF:
@@ -361,7 +357,7 @@ class ExtratorPDF:
         return estrutura
     
     def _segmentar_conteudo(self, texto_formatado: List[Dict[str, Any]], estrutura: Dict[str, Any]) -> List[Segmento]:
-        """Segmentação aprimorada: cada segmento é uma frase completa, reconstruindo frases cortadas e separando listas item a item."""
+        """Segmentação aprimorada: cada segmento é uma frase completa, reconstruindo frases cortadas e separando listas item a item. Usa apenas Stanza."""
         import re
         segmentos = []
         posicao_global = 0
@@ -379,6 +375,7 @@ class ExtratorPDF:
         def termina_com_conector(linha):
             palavras = linha.strip().split()
             return palavras and palavras[-1].lower() in conectores
+        dividir_frases = self._dividir_em_frases_stanza
         i = 0
         while i < len(texto_formatado):
             elem = texto_formatado[i]
@@ -389,7 +386,7 @@ class ExtratorPDF:
                 if bloco_atual:
                     bloco_str = "\n".join(bloco_atual).strip()
                     if bloco_str:
-                        frases = self._dividir_em_frases_stanza(bloco_str)
+                        frases = dividir_frases(bloco_str)
                         for frase in frases:
                             if frase.strip():
                                 segmentos.append(Segmento(
@@ -437,7 +434,7 @@ class ExtratorPDF:
                 if bloco_atual:
                     bloco_str = "\n".join(bloco_atual).strip()
                     if bloco_str:
-                        frases = self._dividir_em_frases_stanza(bloco_str)
+                        frases = dividir_frases(bloco_str)
                         for frase in frases:
                             if frase.strip():
                                 segmentos.append(Segmento(
@@ -462,7 +459,7 @@ class ExtratorPDF:
         if bloco_atual:
             bloco_str = "\n".join(bloco_atual).strip()
             if bloco_str:
-                frases = self._dividir_em_frases_stanza(bloco_str)
+                frases = dividir_frases(bloco_str)
                 for frase in frases:
                     if frase.strip():
                         segmentos.append(Segmento(
