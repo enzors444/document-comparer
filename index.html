@@ -295,9 +295,12 @@
               return;
             }
             const data = await resp.json();
-            resultado.value = data;
+            // Corrigir: garantir que resultado.value tenha o mesmo formato esperado pela tabela
+            resultado.value = {
+              ...resultadoCompleto.value,
+              comparacoes: data.alterados || []
+            };
             mostrarAlterados.value = true;
-            // NÃO sobrescreva resultadoCompleto aqui!
           } catch (e) {
             error.value = 'Erro ao buscar alterados: ' + e;
           }

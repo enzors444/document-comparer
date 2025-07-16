@@ -50,7 +50,6 @@ class ExtratorPDF:
     
     def extrair_documento(self, caminho_pdf: str) -> Documento:
         """Extrai conteúdo estruturado de um PDF."""
-        logger.info(f"Iniciando extração do documento: {caminho_pdf}")
         
         try:
             # Extrair metadados básicos
@@ -75,6 +74,7 @@ class ExtratorPDF:
                 metadados=metadados
             )
             
+            logger.info(f'Iniciando extração do documento: {caminho_pdf}')
             logger.info(f"Extração concluída: {len(segmentos)} segmentos encontrados")
             return documento
             

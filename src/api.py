@@ -25,19 +25,6 @@ RESULTS_DIR.mkdir(exist_ok=True, parents=True)
 app = Flask(__name__)
 CORS(app)
 
-@app.route("/api/upload", methods=["POST"])
-def upload_pdf():
-    logger.info("Recebida requisição para /api/upload")
-    file = request.files.get('file')
-    logger.info(f"Arquivo recebido: {getattr(file, 'filename', None)}")
-    if not file or not getattr(file, 'filename', '').lower().endswith(".pdf"):
-        logger.warning("Arquivo inválido enviado para upload")
-        return jsonify({"error": "Arquivo deve ser PDF"}), 400
-    dest = UPLOAD_DIR / f"{uuid.uuid4()}_{file.filename}"
-    file.save(dest)
-    logger.info(f"Arquivo salvo em: {dest}")
-    return jsonify({"filename": dest.name, "path": str(dest)})
-
 @app.route("/api/comparar", methods=["POST"])
 def comparar():
     logger.info("Recebida requisição para /api/comparar")
@@ -71,28 +58,6 @@ def comparar():
         logger.exception("Erro ao comparar PDFs")
         return jsonify({"error": str(e)}), 500
 
-@app.route("/api/analisar", methods=["POST"])
-def analisar():
-    logger.info("Recebida requisição para /api/analisar")
-    pdf = request.files.get('pdf')
-    logger.info(f"Arquivo recebido: {getattr(pdf, 'filename', None)}")
-    if not pdf:
-        logger.warning("Arquivo PDF não enviado para /api/analisar")
-        return jsonify({"error": "Arquivo PDF é obrigatório"}), 400
-    min_segmento = int(request.form.get('min_segmento', 10))
-    try:
-        path = UPLOAD_DIR / f"{uuid.uuid4()}_{pdf.filename}"
-        pdf.save(path)
-        logger.info(f"Arquivo salvo em: {path}")
-        config = ConfiguracaoProcessamento(tamanho_minimo_segmento=min_segmento)
-        processador = ProcessadorDocumentos(config)
-        documento = processador.analisar_documento_unico(str(path))
-        logger.info("Análise realizada com sucesso")
-        return jsonify(asdict(documento))
-    except Exception as e:
-        logger.exception("Erro ao analisar PDF")
-        return jsonify({"error": str(e)}), 500
-
 @app.route("/api/resultado/<result_id>", methods=["GET"])
 def get_resultado(result_id):
     result_path = RESULTS_DIR / f"{result_id}.json"
@@ -111,18 +76,3 @@ def filtrar_alterados(result_id):
         data = json.load(f)
     alterados = [c for c in data.get("comparacoes", []) if c.get("tipo_diferenca") in ["removido", "adicionado", "modificado"]]
     return {"id": result_id, "alterados": alterados}
-
-@app.route("/api/lista_uploads", methods=["GET"])
-def lista_uploads():
-    files = [f.name for f in UPLOAD_DIR.glob("*.pdf")]
-    return {"arquivos": files}
-
-@app.route("/api/download/<filename>", methods=["GET"])
-def download_pdf(filename):
-    file_path = UPLOAD_DIR / filename
-    if not file_path.exists():
-        return jsonify({"error": "Arquivo não encontrado"}), 404
-    return send_file(str(file_path), mimetype="application/pdf", as_attachment=True, download_name=filename)
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000, debug=True) 

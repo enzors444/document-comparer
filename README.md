@@ -56,13 +56,12 @@ Este projeto é um sistema completo para extração, segmentação e comparaçã
 
 1. **Inicie a API:**
    ```bash
-   python src/api.py
+   python app.py
    ```
    A API estará disponível em `http://127.0.0.1:8000`.
 
 2. **Endpoints principais:**
    - `POST /api/comparar` — Recebe dois PDFs e retorna a comparação.
-   - `POST /api/analisar` — Analisa um único PDF.
    - `GET /api/resultado/<id>` — Busca resultado salvo.
    - `GET /api/filtrar-alterados/<id>` — Retorna apenas segmentos alterados.
 
@@ -91,6 +90,7 @@ comparer/
 ├── resultados/api/      # Resultados das comparações
 ├── index.html           # Interface web (frontend)
 ├── requirements.txt     # Dependências Python
+├── app.py               # Inicializador da API Flask
 └── README.md            # Este arquivo
 ```
 
