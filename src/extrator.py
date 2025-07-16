@@ -9,6 +9,12 @@ from pathlib import Path
 import pdfplumber
 import PyPDF2
 import spacy
+import stanza
+import fitz  # PyMuPDF
+import easyocr
+from typing import cast
+stanza.download('pt')  # Execute uma vez, pode comentar depois
+stanza_nlp = stanza.Pipeline(lang='pt', processors='tokenize', tokenize_no_ssplit=False)
 
 from .models import Documento, Segmento, ConfiguracaoProcessamento
 from .utils import setup_logging
@@ -144,16 +150,48 @@ class ExtratorPDF:
         return info
     
     def _extrair_texto_formatado(self, caminho_pdf: str) -> List[Dict[str, Any]]:
-        """Extrai texto preservando formatação e estrutura, removendo rodapés/cabeçalhos repetidos."""
+        """Extrai texto preservando formatação e estrutura, removendo rodapés/cabeçalhos repetidos. Usa PyMuPDF e EasyOCR para máxima qualidade."""
         texto_formatado = []
         rodape_cabecalho_contagem = {}
         paginas_textos = []
-        with pdfplumber.open(caminho_pdf) as pdf:
-            for num_pagina, pagina in enumerate(pdf.pages, 1):
-                logger.debug(f"Processando página {num_pagina}")
-                texto_pagina = self._extrair_texto_pagina(pagina, num_pagina)
-                paginas_textos.append([e["texto"] for e in texto_pagina])
-                texto_formatado.extend(texto_pagina)
+        reader = easyocr.Reader(['pt'], gpu=False)
+        doc = fitz.open(caminho_pdf)
+        for num_pagina in range(doc.page_count):
+            pagina = cast(fitz.Page, doc.load_page(num_pagina))  # type: ignore
+            logger.debug(f"Processando página {num_pagina+1}")
+            # Tenta extrair texto com PyMuPDF
+            texto_pymupdf = pagina.get_text("text")  # type: ignore[attr-defined]
+            if not texto_pymupdf or self._texto_muito_ruidoso(texto_pymupdf):
+                # Se não há texto ou está ruidoso, faz OCR com EasyOCR
+                img = pagina.get_pixmap(dpi=300).pil_tobytes(format="PNG")  # type: ignore[attr-defined]
+                import io
+                from PIL import Image
+                image = Image.open(io.BytesIO(img))
+                resultado_ocr = reader.readtext(img, detail=0, paragraph=True)
+                # resultado_ocr pode ser lista de listas, garantir lista de strings
+                if isinstance(resultado_ocr, list):
+                    resultado_ocr = [str(x) for x in resultado_ocr]
+                texto_pagina = "\n".join(resultado_ocr)
+            else:
+                texto_pagina = texto_pymupdf
+            # Limpeza e segmentação de linhas
+            linhas = texto_pagina.split('\n')
+            linhas_limpas = self._limpar_linhas(linhas)
+            linhas_unidas = self._unir_linhas_quebradas(linhas_limpas)
+            elementos = []
+            for pos, linha in enumerate(linhas_unidas):
+                if linha.strip():
+                    tipo = self._detectar_tipo_elemento(linha)
+                    elemento = {
+                        "texto": linha.strip(),
+                        "pagina": num_pagina+1,
+                        "posicao": pos,
+                        "tipo": tipo,
+                        "coordenadas": {"x": 0.0, "y": 0.0, "width": 0.0, "height": 0.0}
+                    }
+                    elementos.append(elemento)
+            paginas_textos.append([e["texto"] for e in elementos])
+            texto_formatado.extend(elementos)
         # Detectar rodapés/cabeçalhos repetidos (presentes em 80%+ das páginas)
         total_paginas = len(paginas_textos)
         for pagina in paginas_textos:
@@ -165,22 +203,36 @@ class ExtratorPDF:
         return texto_formatado_filtrado
     
     def _extrair_texto_pagina(self, pagina, num_pagina: int) -> List[Dict[str, Any]]:
-        """Extrai texto de uma página específica."""
+        """Extrai texto de uma página específica, usando OCR se necessário e limpando ruídos."""
+        import pytesseract
+        from PIL import Image
         elementos = []
-        
+
         # Extrair texto com coordenadas
         texto_completo = pagina.extract_text()
-        if not texto_completo:
-            return elementos
-        
-        # Dividir em linhas e processar
+        usar_ocr = False
+        if not texto_completo or self._texto_muito_ruidoso(texto_completo):
+            # Se não há texto ou está muito ruidoso, tenta OCR na imagem da página
+            try:
+                img = pagina.to_image(resolution=300).original
+                texto_completo = pytesseract.image_to_string(img, lang='por')
+                usar_ocr = True
+            except Exception as ocr_error:
+                logger.warning(f"OCR falhou na página {num_pagina}: {ocr_error}")
+                return elementos
+            if not texto_completo:
+                return elementos
+
+        # Dividir em linhas e limpar
         linhas = texto_completo.split('\n')
-        
-        for pos, linha in enumerate(linhas):
+        linhas_limpas = self._limpar_linhas(linhas)
+
+        # Unir linhas quebradas que pertencem à mesma frase
+        linhas_unidas = self._unir_linhas_quebradas(linhas_limpas)
+
+        for pos, linha in enumerate(linhas_unidas):
             if linha.strip():
-                # Detectar tipo de elemento
                 tipo = self._detectar_tipo_elemento(linha)
-                
                 elemento = {
                     "texto": linha.strip(),
                     "pagina": num_pagina,
@@ -188,10 +240,68 @@ class ExtratorPDF:
                     "tipo": tipo,
                     "coordenadas": self._extrair_coordenadas(pagina, linha)
                 }
-                
                 elementos.append(elemento)
-        
         return elementos
+
+    def _limpar_linhas(self, linhas: list) -> list:
+        """Remove linhas com ruído, rodapés, cabeçalhos, hashes, datas, só números, etc."""
+        linhas_limpas = []
+        for linha in linhas:
+            l = linha.strip()
+            if not l:
+                continue
+            # Linhas muito curtas
+            if len(l) < 3:
+                continue
+            # Só números ou datas
+            if re.match(r'^[0-9 .:/-]+$', l):
+                continue
+            # Hashes/códigos longos
+            if re.match(r'^[A-Fa-f0-9]{8,}$', l):
+                continue
+            # Rodapés/cabeçalhos típicos
+            if re.search(r'p[áa]gina\s*\d+(\s*de\s*\d+)?', l, re.IGNORECASE):
+                continue
+            if re.search(r'data[:\s]', l, re.IGNORECASE):
+                continue
+            if re.search(r'vers[ãa]o\s*\d+', l, re.IGNORECASE):
+                continue
+            # Linhas com muitos símbolos
+            if len(re.sub(r'[\w\s]', '', l)) > len(l) * 0.4:
+                continue
+            # Linhas com poucas letras
+            if len(re.findall(r'[a-zA-Záéíóúãõâêôç]', l)) < 2:
+                continue
+            # Linhas que parecem tabelas (muitos separadores)
+            if l.count('|') > 2 or l.count(';') > 2 or l.count(',') > 5:
+                continue
+            linhas_limpas.append(l)
+        return linhas_limpas
+
+    def _unir_linhas_quebradas(self, linhas: list) -> list:
+        """Une linhas que claramente pertencem à mesma frase (não terminam com pontuação forte)."""
+        resultado = []
+        buffer = ''
+        for l in linhas:
+            if not buffer:
+                buffer = l
+            else:
+                if not re.search(r'[.!?]$', buffer):
+                    buffer += ' ' + l
+                else:
+                    resultado.append(buffer)
+                    buffer = l
+        if buffer:
+            resultado.append(buffer)
+        return resultado
+
+    def _texto_muito_ruidoso(self, texto: str) -> bool:
+        """Heurística: considera texto ruidoso se mais de 30% dos caracteres não são letras, números ou pontuação comum."""
+        total = len(texto)
+        if total == 0:
+            return True
+        limpo = re.sub(r'[\w\s.,;:!?-]', '', texto)
+        return (len(limpo) / total) > 0.3
     
     def _detectar_tipo_elemento(self, texto: str) -> str:
         """Detecta o tipo de elemento baseado no conteúdo."""
@@ -277,9 +387,9 @@ class ExtratorPDF:
             # Se for título, fecha bloco anterior e inicia novo contexto
             if eh_titulo(tipo, texto):
                 if bloco_atual:
-                    frase_reconstruida = " ".join(bloco_atual).strip()
-                    if frase_reconstruida:
-                        frases = self._dividir_em_frases(frase_reconstruida)
+                    bloco_str = "\n".join(bloco_atual).strip()
+                    if bloco_str:
+                        frases = self._dividir_em_frases_stanza(bloco_str)
                         for frase in frases:
                             if frase.strip():
                                 segmentos.append(Segmento(
@@ -325,9 +435,9 @@ class ExtratorPDF:
             # Se for linha vazia, fecha bloco
             if not texto:
                 if bloco_atual:
-                    frase_reconstruida = " ".join(bloco_atual).strip()
-                    if frase_reconstruida:
-                        frases = self._dividir_em_frases(frase_reconstruida)
+                    bloco_str = "\n".join(bloco_atual).strip()
+                    if bloco_str:
+                        frases = self._dividir_em_frases_stanza(bloco_str)
                         for frase in frases:
                             if frase.strip():
                                 segmentos.append(Segmento(
@@ -345,33 +455,14 @@ class ExtratorPDF:
                     bloco_atual = []
                 i += 1
                 continue
-            # Reconstrução de frases: juntar até pontuação forte e não terminar em conector
+            # Reconstrução de frases: juntar tudo até bloco ser fechado
             bloco_atual.append(texto)
-            if termina_com_pontuacao_forte(texto) and not termina_com_conector(texto):
-                frase_reconstruida = " ".join(bloco_atual).strip()
-                if frase_reconstruida:
-                    frases = self._dividir_em_frases(frase_reconstruida)
-                    for frase in frases:
-                        if frase.strip():
-                            segmentos.append(Segmento(
-                                texto=frase.strip(),
-                                pagina=elem["pagina"],
-                                posicao=posicao_global,
-                                tipo=self._detectar_tipo_elemento(frase),
-                                contexto={
-                                    "clausula": clausula_atual,
-                                    "secao": secao_atual,
-                                    "titulo": contexto_atual
-                                }
-                            ))
-                            posicao_global += 1
-                bloco_atual = []
             i += 1
         # Salva último bloco
         if bloco_atual:
-            frase_reconstruida = " ".join(bloco_atual).strip()
-            if frase_reconstruida:
-                frases = self._dividir_em_frases(frase_reconstruida)
+            bloco_str = "\n".join(bloco_atual).strip()
+            if bloco_str:
+                frases = self._dividir_em_frases_stanza(bloco_str)
                 for frase in frases:
                     if frase.strip():
                         segmentos.append(Segmento(
@@ -386,12 +477,36 @@ class ExtratorPDF:
                             }
                         ))
                         posicao_global += 1
+        # Pós-processamento: unir fragmentos curtos e filtrar vazios
+        segmentos = self._pos_processar_segmentos(segmentos, tamanho_minimo=20)
         return segmentos
+
+    def _pos_processar_segmentos(self, segmentos: List[Segmento], tamanho_minimo: int = 20) -> List[Segmento]:
+        """Une fragmentos curtos ao segmento anterior e remove segmentos vazios ou só com espaços."""
+        resultado = []
+        buffer = None
+        for seg in segmentos:
+            texto = seg.texto.strip()
+            if not texto:
+                continue  # ignora vazios
+            if len(texto) < tamanho_minimo:
+                if resultado:
+                    # Une ao segmento anterior
+                    resultado[-1].texto += ' ' + texto
+                else:
+                    # Se for o primeiro, só adiciona
+                    resultado.append(seg)
+            else:
+                resultado.append(seg)
+        # Filtra novamente vazios (caso união gere algum)
+        resultado = [seg for seg in resultado if seg.texto.strip()]
+        return resultado
     
-    def _dividir_em_frases(self, texto: str) -> List[str]:
-        """Divide o texto em frases completas, usando spaCy para máxima robustez."""
-        doc = _nlp_pt(texto)
-        return [sent.text.strip() for sent in doc.sents if sent.text.strip()]
+    def _dividir_em_frases_stanza(self, texto: str) -> list:
+        doc: Any = stanza_nlp(texto)  # type: ignore
+        if hasattr(doc, 'sentences'):
+            return [sentence.text.strip() for sentence in doc.sentences if hasattr(sentence, 'text') and sentence.text.strip()]
+        return []
     
     def _separar_secoes_subsecoes(self, texto: str) -> List[str]:
         """Separa seções (XII, XIII), subseções (6.1, 6.2) e títulos em maiúsculas em segmentos distintos."""

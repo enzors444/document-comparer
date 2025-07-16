@@ -4,7 +4,7 @@ Modelos de dados para o sistema de comparação de documentos jurídicos.
 
 from enum import Enum
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
+from dataclasses import dataclass, field
 from datetime import datetime
 
 
@@ -23,98 +23,68 @@ class SignificanciaJuridica(str, Enum):
     BAIXA = "baixa"
     NENHUMA = "nenhuma"
 
-
-class Segmento(BaseModel):
+@dataclass
+class Segmento:
     """Representa um segmento de texto do documento."""
-    texto: str = Field(..., description="Texto do segmento")
-    pagina: int = Field(..., description="Número da página")
-    posicao: int = Field(..., description="Posição relativa no documento")
-    tipo: str = Field(default="texto", description="Tipo do segmento (título, cláusula, etc.)")
-    contexto: Optional[Any] = Field(default=None, description="Contexto adicional (pode ser string ou dict)")
-    
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    texto: str
+    pagina: int
+    posicao: int
+    tipo: str = "texto"
+    contexto: Optional[Any] = None
 
-
-class ComparacaoSegmento(BaseModel):
+@dataclass
+class ComparacaoSegmento:
     """Resultado da comparação entre dois segmentos."""
-    segmento_pdf1: Optional[Segmento] = Field(default=None, description="Segmento do primeiro PDF")
-    segmento_pdf2: Optional[Segmento] = Field(default=None, description="Segmento do segundo PDF")
-    tipo_diferenca: TipoDiferenca = Field(..., description="Tipo de diferença identificada")
-    significativo: bool = Field(..., description="Se a alteração é juridicamente significativa")
-    significancia_juridica: SignificanciaJuridica = Field(..., description="Nível de significância")
-    confianca: float = Field(..., ge=0.0, le=1.0, description="Confiança na comparação (0-1)")
-    detalhes: Optional[str] = Field(default=None, description="Detalhes adicionais da comparação")
-    
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    segmento_pdf1: Optional[Segmento] = None
+    segmento_pdf2: Optional[Segmento] = None
+    tipo_diferenca: TipoDiferenca = TipoDiferenca.SEM_DIFERENCA
+    significativo: bool = False
+    significancia_juridica: SignificanciaJuridica = SignificanciaJuridica.NENHUMA
+    confianca: float = 1.0
+    detalhes: Optional[str] = None
 
-
-class Documento(BaseModel):
+@dataclass
+class Documento:
     """Representa um documento processado."""
-    nome_arquivo: str = Field(..., description="Nome do arquivo original")
-    seguradora: Optional[str] = Field(default=None, description="Nome da seguradora")
-    data_versao: Optional[datetime] = Field(default=None, description="Data da versão")
-    ramo_seguro: Optional[str] = Field(default=None, description="Ramo do seguro")
-    segmentos: List[Segmento] = Field(default_factory=list, description="Segmentos do documento")
-    metadados: Dict[str, Any] = Field(default_factory=dict, description="Metadados adicionais")
-    
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    nome_arquivo: str
+    seguradora: Optional[str] = None
+    data_versao: Optional[datetime] = None
+    ramo_seguro: Optional[str] = None
+    segmentos: List[Segmento] = field(default_factory=list)
+    metadados: Dict[str, Any] = field(default_factory=dict)
 
-
-class ResultadoComparacao(BaseModel):
+@dataclass
+class ResultadoComparacao:
     """Resultado completo da comparação entre dois documentos."""
-    documento1: Documento = Field(..., description="Primeiro documento")
-    documento2: Documento = Field(..., description="Segundo documento")
-    comparacoes: List[ComparacaoSegmento] = Field(default_factory=list, description="Lista de comparações")
-    estatisticas: Dict[str, Any] = Field(default_factory=dict, description="Estatísticas da comparação")
-    data_comparacao: datetime = Field(default_factory=datetime.now, description="Data da comparação")
-    
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    documento1: Documento
+    documento2: Documento
+    comparacoes: List[ComparacaoSegmento] = field(default_factory=list)
+    estatisticas: Dict[str, Any] = field(default_factory=dict)
+    data_comparacao: datetime = field(default_factory=datetime.now)
 
-
-class RespostaComparacao(BaseModel):
+@dataclass
+class RespostaComparacao:
     """Resposta da API contendo apenas comparações e estatísticas."""
-    comparacoes: List[ComparacaoSegmento] = Field(default_factory=list, description="Lista de comparações")
-    estatisticas: Dict[str, Any] = Field(default_factory=dict, description="Estatísticas da comparação")
-    data_comparacao: datetime = Field(default_factory=datetime.now, description="Data da comparação")
-    
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    comparacoes: List[ComparacaoSegmento] = field(default_factory=list)
+    estatisticas: Dict[str, Any] = field(default_factory=dict)
+    data_comparacao: datetime = field(default_factory=datetime.now)
 
-
-class ConfiguracaoProcessamento(BaseModel):
+@dataclass
+class ConfiguracaoProcessamento:
     """Configurações para o processamento de documentos."""
     # Configurações de extração
-    preservar_formatacao: bool = Field(default=True, description="Preservar formatação original")
-    detectar_quebras_linha: bool = Field(default=True, description="Detectar quebras de linha incorretas")
+    preservar_formatacao: bool = True
+    detectar_quebras_linha: bool = True
     
     # Configurações de normalização
-    corrigir_hifenacao: bool = Field(default=True, description="Corrigir hifenização")
-    remover_espacos_duplicados: bool = Field(default=True, description="Remover espaços duplicados")
-    preservar_termos_tecnicos: bool = Field(default=True, description="Preservar termos técnicos")
+    corrigir_hifenacao: bool = True
+    remover_espacos_duplicados: bool = True
+    preservar_termos_tecnicos: bool = True
     
     # Configurações de segmentação
-    tamanho_minimo_segmento: int = Field(default=30, description="Tamanho mínimo do segmento")
-    incluir_contexto: bool = Field(default=True, description="Incluir contexto nos segmentos")
+    tamanho_minimo_segmento: int = 30
+    incluir_contexto: bool = True
     
     # Configurações de comparação
-    threshold_similaridade: float = Field(default=0.85, ge=0.0, le=1.0, description="Threshold de similaridade")
-    detectar_significancia: bool = Field(default=True, description="Detectar significância jurídica")
-    
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        } 
+    threshold_similaridade: float = 0.85
+    detectar_significancia: bool = True 

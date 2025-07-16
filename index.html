@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <title>Comparador de Documentos Jurídicos</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <style>
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: #f4f6fa;
+      margin: 0;
+      padding: 0;
+    }
+    #app {
+      max-width: 900px;
+      margin: 60px auto;
+      background: #fff;
+      border-radius: 14px;
+      box-shadow: 0 4px 24px #0002;
+      padding: 36px 32px 28px 32px;
+      text-align: center;
+    }
+    h1 {
+      font-size: 2.1rem;
+      margin-bottom: 1.2em;
+      color: #1a237e;
+      font-weight: 700;
+    }
+    label {
+      display: block;
+      margin-bottom: 1.2em;
+      font-size: 1.08em;
+      color: #333;
+      text-align: left;
+    }
+    input[type="file"] {
+      margin-left: 8px;
+    }
+    button {
+      background: #1976d2;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 0.7em 1.7em;
+      font-size: 1.08em;
+      cursor: pointer;
+      margin-top: 1.2em;
+      margin-bottom: 0.5em;
+      transition: background 0.2s;
+      font-weight: 500;
+    }
+    button:disabled {
+      background: #b0c4de;
+      cursor: not-allowed;
+    }
+    .result, .error, .loading {
+      margin-top: 2em;
+      padding: 1.1em;
+      border-radius: 8px;
+      text-align: left;
+    }
+    .result {
+      background: #f8f8f8;
+      border: 1px solid #e3e3e3;
+    }
+    .error {
+      background: #ffeaea;
+      color: #b00020;
+      border: 1px solid #f5c2c7;
+    }
+    .loading {
+      background: #eaf4ff;
+      color: #1976d2;
+      border: 1px solid #bbdefb;
+    }
+    .actions {
+      margin-bottom: 1em;
+      text-align: right;
+    }
+    .actions button {
+      margin-left: 0.5em;
+      margin-top: 0;
+    }
+    .footer {
+      margin-top: 2.5em;
+      color: #888;
+      font-size: 0.95em;
+    }
+    table.comparacao {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      margin-top: 1em;
+      font-size: 1em;
+      background: #fff;
+      box-shadow: 0 2px 8px #0001;
+      table-layout: fixed;
+    }
+    table.comparacao th, table.comparacao td {
+      padding: 0.7em 0.6em;
+      text-align: left;
+      vertical-align: top;
+      word-break: break-word;
+    }
+    table.comparacao th {
+      background: #1976d2;
+      color: #fff;
+      font-weight: 700;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    table.comparacao tr:nth-child(even) td {
+      background: #f4f8ff;
+    }
+    .comparacao th:first-child, .comparacao td:first-child {
+      text-align: center;
+      width: 2.5em;
+      color: #1976d2;
+      font-weight: bold;
+    }
+    .comparacao th:nth-child(2), .comparacao th:nth-child(3) {
+      color: #1976d2;
+      font-weight: bold;
+      text-align: left;
+      width: 32%;
+    }
+    .comparacao th:nth-child(4), .comparacao td:nth-child(4) {
+      width: 8em;
+      text-align: center;
+    }
+    .comparacao th:last-child, .comparacao td:last-child {
+      text-align: center;
+      width: 7em;
+    }
+    .tipo-modificado td { background: #fffbe6 !important; color: #8a6d00; font-weight: 600; }
+    .tipo-adicionado td { background: #e6ffed !important; color: #1b5e20; font-weight: 600; }
+    .tipo-removido td   { background: #ffeaea !important; color: #b71c1c; font-weight: 600; }
+    .tipo-sem_diferenca td { background: #f8f8f8 !important; color: #888; }
+    .legenda {
+      margin-top: 1.5em;
+      font-size: 0.97em;
+      color: #444;
+      display: flex;
+      gap: 1.5em;
+      flex-wrap: wrap;
+    }
+    .legenda span {
+      display: inline-block;
+      padding: 0.3em 0.8em;
+      border-radius: 5px;
+      margin-right: 0.5em;
+      font-size: 0.97em;
+      border: 1px solid #e0e0e0;
+    }
+    .legenda .modificado { background: #fffbe6; }
+    .legenda .adicionado { background: #e6ffed; }
+    .legenda .removido   { background: #ffeaea; }
+    .legenda .sem_diferenca { background: #f8f8f8; color: #888; }
+    .small { font-size: 0.93em; color: #888; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <h1>Comparador de Documentos Jurídicos</h1>
+    <form @submit.prevent="comparar">
+      <label>PDF 1:
+        <input type="file" ref="pdf1Ref" required>
+      </label>
+      <label>PDF 2:
+        <input type="file" ref="pdf2Ref" required>
+      </label>
+      <button type="submit" :disabled="loading">Comparar</button>
+    </form>
+    <div v-if="loading" class="loading">Processando, aguarde...</div>
+    <div v-if="error" class="error">{{ error }}</div>
+    <div v-if="resultado" class="result">
+      <div class="actions">
+        <button @click="mostrarResultadoCompleto" :disabled="!mostrarAlterados">Resultado completo</button>
+        <button @click="filtrarAlterados" :disabled="mostrarAlterados">Apenas alterados</button>
+      </div>
+      <div class="legenda">
+        <span class="modificado">Modificado</span>
+        <span class="adicionado">Adicionado</span>
+        <span class="removido">Removido</span>
+        <span class="sem_diferenca">Sem diferença</span>
+      </div>
+      <table class="comparacao">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>PDF 1</th>
+            <th>PDF 2</th>
+            <th>Tipo</th>
+            <th>Similaridade</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="(comp, idx) in resultado.comparacoes || []" :key="idx" :class="'tipo-' + (comp.tipo_diferenca || 'sem_diferenca')">
+            <td>{{ idx + 1 }}</td>
+            <td>
+              <div v-if="comp.segmento_pdf1">{{ comp.segmento_pdf1.texto }}</div>
+              <div v-else class="small">—</div>
+            </td>
+            <td>
+              <div v-if="comp.segmento_pdf2">{{ comp.segmento_pdf2.texto }}</div>
+              <div v-else class="small">—</div>
+            </td>
+            <td>{{ traduzirTipo(comp.tipo_diferenca) }}</td>
+            <td>
+              <span v-if="typeof comp.similaridade === 'number' && !isNaN(comp.similaridade)">
+                {{ (comp.similaridade * 100).toFixed(1) }}%
+              </span>
+              <span v-else>—</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-if="resultado.estatisticas" style="margin-top:1.5em;">
+        <strong>Estatísticas:</strong>
+        <pre style="background:#f4f4f4; border-radius:6px; padding:0.7em;">{{ JSON.stringify(resultado.estatisticas, null, 2) }}</pre>
+      </div>
+    </div>
+    <div class="footer">
+      Desenvolvido para análise e comparação de documentos jurídicos.
+    </div>
+  </div>
+  <script>
+    const { createApp, ref } = Vue;
+    createApp({
+      setup() {
+        const pdf1Ref = ref(null);
+        const pdf2Ref = ref(null);
+        const resultado = ref(null);
+        const resultadoCompleto = ref(null);
+        const loading = ref(false);
+        const error = ref('');
+        const mostrarAlterados = ref(false);
+        const resultId = ref(null);
+
+        const comparar = async () => {
+          resultado.value = null;
+          resultadoCompleto.value = null;
+          error.value = '';
+          loading.value = true;
+          mostrarAlterados.value = false;
+          resultId.value = null;
+
+          const pdf1 = pdf1Ref.value?.files[0];
+          const pdf2 = pdf2Ref.value?.files[0];
+          if (!pdf1 || !pdf2) {
+            error.value = 'Selecione os dois arquivos PDF.';
+            loading.value = false;
+            return;
+          }
+
+          const formData = new FormData();
+          formData.append('pdf1', pdf1);
+          formData.append('pdf2', pdf2);
+
+          try {
+            const resp = await fetch('http://127.0.0.1:8000/api/comparar', {
+              method: 'POST',
+              body: formData
+            });
+            if (!resp.ok) {
+              const text = await resp.text();
+              error.value = `Erro ${resp.status}: ${text}`;
+              loading.value = false;
+              return;
+            }
+            const data = await resp.json();
+            resultado.value = data;
+            resultadoCompleto.value = data; // Salva o resultado completo
+            if (data.id) resultId.value = data.id;
+          } catch (e) {
+            error.value = 'Erro ao conectar à API: ' + e;
+          }
+          loading.value = false;
+        };
+
+        const filtrarAlterados = async () => {
+          if (!resultId.value) {
+            error.value = 'ID de resultado não encontrado.';
+            return;
+          }
+          loading.value = true;
+          error.value = '';
+          try {
+            const resp = await fetch(`http://127.0.0.1:8000/api/filtrar-alterados/${resultId.value}`);
+            if (!resp.ok) {
+              const text = await resp.text();
+              error.value = `Erro ${resp.status}: ${text}`;
+              loading.value = false;
+              return;
+            }
+            const data = await resp.json();
+            resultado.value = data;
+            mostrarAlterados.value = true;
+            // NÃO sobrescreva resultadoCompleto aqui!
+          } catch (e) {
+            error.value = 'Erro ao buscar alterados: ' + e;
+          }
+          loading.value = false;
+        };
+
+        function mostrarResultadoCompleto() {
+          resultado.value = resultadoCompleto.value;
+          mostrarAlterados.value = false;
+        }
+
+        function traduzirTipo(tipo) {
+          if (tipo === 'modificado') return 'Modificado';
+          if (tipo === 'adicionado') return 'Adicionado';
+          if (tipo === 'removido') return 'Removido';
+          if (tipo === 'sem_diferenca') return 'Sem diferença';
+          return tipo || '—';
+        }
+
+        return {
+          pdf1Ref,
+          pdf2Ref,
+          resultado,
+          resultadoCompleto,
+          loading,
+          error,
+          comparar,
+          filtrarAlterados,
+          mostrarAlterados,
+          mostrarResultadoCompleto,
+          traduzirTipo
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html> 

@@ -6,6 +6,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import json
+from dataclasses import asdict
 
 from .models import ConfiguracaoProcessamento, Documento, ResultadoComparacao
 from .extrator import ExtratorPDF
@@ -76,7 +77,7 @@ class ProcessadorDocumentos:
             
             # Salvar resultado JSON
             caminho_json = diretorio_saida / "resultado_comparacao.json"
-            resultado_dict = resultado.dict()
+            resultado_dict = asdict(resultado)
             salvar_resultado_json(resultado_dict, str(caminho_json))
             
             # Gerar e salvar relatório textual
@@ -159,7 +160,7 @@ class ProcessadorDocumentos:
             
             # Salvar documento em JSON
             caminho_json = diretorio_saida / "analise_documento.json"
-            documento_dict = documento.dict()
+            documento_dict = asdict(documento)
             
             with open(caminho_json, 'w', encoding='utf-8') as f:
                 json.dump(documento_dict, f, ensure_ascii=False, indent=2, default=str)

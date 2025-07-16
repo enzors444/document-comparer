@@ -7,7 +7,7 @@ import re
 import logging
 from typing import List, Dict, Any, Optional, Tuple, Set
 from difflib import SequenceMatcher
-from Levenshtein import ratio as levenshtein_ratio
+from rapidfuzz.fuzz import ratio as levenshtein_ratio
 from collections import defaultdict
 from sentence_transformers import SentenceTransformer, util
 from functools import lru_cache
@@ -37,6 +37,9 @@ class Comparador:
         self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
         self.spacy_nlp = spacy.load('pt_core_news_sm')
         self._adicionar_regra_segmentacao_frase(self.spacy_nlp)
+        # Inicializar o pipeline do Stanza apenas uma vez
+        import stanza
+        self.stanza_nlp = stanza.Pipeline('pt', processors='tokenize', tokenize_no_ssplit=False)
         
     def _carregar_termos_significativos(self) -> set:
         """Carrega termos que indicam alterações juridicamente significativas."""
@@ -224,26 +227,32 @@ class Comparador:
         return frases_processadas
     
     def _quebrar_em_frases(self, texto: str) -> List[str]:
-        """Segmenta o texto em frases usando sentsplit (português), filtra ruídos, divide listas técnicas e loga descartes."""
-        from sentsplit.segment import SentSplit
+        """Segmenta o texto em frases usando Stanza (português), filtra ruídos, divide listas técnicas e loga descartes."""
         import re
         import logging
-        splitter = SentSplit(lang='pt')
-        if not texto or len(texto.strip()) < 10:
-            return [texto.strip()] if texto.strip() else []
-        frases = list(splitter.segment(texto))
+        nlp = self.stanza_nlp
+        doc = nlp(texto)
+        frases = [sent.text for sent in doc.sentences]  # type: ignore
         frases_filtradas = []
         logger = logging.getLogger(__name__)
         for frase in frases:
             f = frase.strip()
-            # 1. Filtrar frases muito curtas ou sem letras
-            if len(f) < 5 or len(f.split()) < 3:
+            # 1. Remover datas, páginas e metadados do início/fim
+            f = re.sub(r'^(\d{2} de [a-zç]+ de \d{4}(?: \d+)?|\d{2}/\d{2}/\d{4}|\d{1,2} de [A-Z][a-z]+ de \d{4}|\d{1,2}/\d{1,2}/\d{2,4}|p[áa]gina\s*\d+|\d{1,2}h\d{2}|\d{2}:\d{2}:\d{2}|\d+)$', '', f, flags=re.IGNORECASE).strip()
+            f = re.sub(r'^(\d{2} de [a-zç]+ de \d{4}(?: \d+)?|\d{2}/\d{2}/\d{4}|\d{1,2} de [A-Z][a-z]+ de \d{4}|\d{1,2}/\d{1,2}/\d{2,4}|p[áa]gina\s*\d+|\d{1,2}h\d{2}|\d{2}:\d{2}:\d{2}|\d+)[\s\-:]+', '', f, flags=re.IGNORECASE).strip()
+            f = re.sub(r'[\-:]+$', '', f).strip()
+            # 2. Se sobrou só metadado, descartar
+            if not f or re.fullmatch(r'(\d{2} de [a-zç]+ de \d{4}|\d{2}/\d{2}/\d{4}|\d+|p[áa]gina\s*\d+)', f, flags=re.IGNORECASE):
+                logger.debug(f"Descartada (metadado): {frase}")
+                continue
+            # 3. Filtro para frases curtas (mínimo 4 palavras)
+            if len(f.split()) < 4:
                 logger.debug(f"Descartada (curta): {f}")
                 continue
             if not re.search(r'[a-zA-Záéíóúãõâêîôûç]', f):
                 logger.debug(f"Descartada (sem letras): {f}")
                 continue
-            # 2. Filtrar ruídos (datas, códigos, números)
+            # 4. Filtrar ruídos (datas, códigos, números)
             padroes_ruido = [
                 r'^\d+$', r'^\d{2}[./]\d{2}[./]\d{4}$', r'^p[áa]gina\s*\d+$', r'^c[óo]digo\s*\w+$',
                 r'^vers[ãa]o\s*\d+\.\d+\.\d+$', r'^\d{2}:\d{2}:\d{2}$', r'^número\s*\d+$', r'^data\s*\d+$'
@@ -251,7 +260,7 @@ class Comparador:
             if any(re.match(p, f, re.IGNORECASE) for p in padroes_ruido):
                 logger.debug(f"Descartada (ruído): {f}")
                 continue
-            # 3. Pós-processamento para listas técnicas (ex: "a) ... b) ...")
+            # 5. Pós-processamento para listas técnicas (ex: "a) ... b) ...")
             itens = re.split(r'(?<=\))\s+(?=[a-zA-Z]\))', f)
             for item in itens:
                 item = item.strip()
@@ -282,7 +291,7 @@ class Comparador:
         return " | ".join(contexto) if contexto else "Sem contexto adicional"
     
     def _normalizar_texto(self, texto: str) -> str:
-        """Normalização robusta: remove rodapés/cabeçalhos, corrige pontuação, espaços, aspas, hífens, une linhas, protege abreviações, limpa caracteres estranhos e padroniza o texto."""
+        """Normalização robusta: remove rodapés/cabeçalhos, corrige pontuação, espaços, aspas, hífens, une linhas, protege abreviações, limpa caracteres estranhos, separa palavras coladas e padroniza o texto."""
         import re
         # 1. Remover rodapés/cabeçalhos/metadados
         padroes_remover = [
@@ -297,7 +306,13 @@ class Comparador:
         # 3. Corrigir espaços antes/depois de pontuação
         texto = re.sub(r'\s*([.!?,;:])\s*', r'\1 ', texto)
         # 4. Corrigir palavras coladas (letra minúscula seguida de maiúscula)
-        texto = re.sub(r'([a-z])([A-Z])', r'\1 \2', texto)
+        texto = re.sub(r'([a-záéíóúãõâêîôûç])([A-ZÁÉÍÓÚÃÕÂÊÎÔÛÇ])', r'\1 \2', texto)
+        # 4b. Corrigir palavras coladas (número seguido de letra)
+        texto = re.sub(r'(\d)([A-Za-z])', r'\1 \2', texto)
+        texto = re.sub(r'([A-Za-z])(\d)', r'\1 \2', texto)
+        # 4c. Corrigir palavras coladas por ausência de espaço entre palavras comuns (heurística)
+        texto = re.sub(r'(obrigação)legal(do)segurado', r'obrigação legal do segurado', texto, flags=re.IGNORECASE)
+        texto = re.sub(r'(falta)de(s)averacidade', r'falta de essa veracidade', texto, flags=re.IGNORECASE)
         # 5. Padronizar aspas e hífens
         texto = texto.replace('“', '"').replace('”', '"').replace('‘', "'").replace('’', "'")
         texto = texto.replace('–', '-').replace('—', '-')
@@ -386,7 +401,7 @@ class Comparador:
         if not texto1 or not texto2:
             return 0.0
         # Similaridade textual (Levenshtein)
-        sim_textual = levenshtein_ratio(texto1.lower(), texto2.lower())
+        sim_textual = levenshtein_ratio(texto1.lower(), texto2.lower()) / 100
         # Similaridade semântica (embeddings) com cache
         emb1 = self._embedding_cached(texto1)
         emb2 = self._embedding_cached(texto2)
@@ -453,7 +468,7 @@ class Comparador:
         texto2 = seg2.texto
         
         # Similaridade básica
-        similaridade_basica = levenshtein_ratio(texto1, texto2)
+        similaridade_basica = levenshtein_ratio(texto1, texto2) / 100
         
         # Ajustes baseados no tipo
         if tipo in ["titulo_principal", "subtitulo", "clausula"]:
